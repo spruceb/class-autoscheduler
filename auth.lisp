@@ -1,13 +1,13 @@
-(ql:quickload "cl-base64")
+(ql:quickload :cl-base64)
 (ql:quickload :drakma)
 (ql:quickload :cl-json)
 (ql:quickload :cl-ppcre)
 (ql:quickload :cl-utilities)
 (ql:quickload :alexandria)
 
-(require 'cl-json)
-(require 'cl-base64)
-(require 'drakma)
+;; (require 'cl-json)
+;; (require 'cl-base64)
+;; (require 'drakma)
 (with-open-file (stream "keys")
   (defparameter *consumer-key* (read-line stream))
   (defparameter *consumer-secret* (read-line stream)))
@@ -140,10 +140,18 @@
   (and (<= (start-time containing-time) (start-time contained-time))
        (>= (end-time containing-time) (end-time contained-time))))
 
-(defun overlap-p (first-time second-time)
-  (not (or
-	(<= (start-time first-time) (end-time first-time) (start-time second-time))
-	(>= (end-time first-time) (start-time first-time) (end-time second-time)))))
+;; (defun overlap-p (first-time second-time)
+;;   (not (or
+;; 	(<= (start-time first-time) (end-time first-time) (start-time second-time))
+;; 	(>= (end-time first-time) (start-time first-time) (end-time second-time)))))
+
+(defun overlap-p (&rest times)
+  (setf times (sort times #'< :key 'start-time))
+  ;(format t "~a ~a~%" (mapcar 'start-time times) (apply #'< (mapcar 'start-time times)))
+  (or
+   (not (apply #'< (mapcar 'start-time times)))
+   (not (loop for i from 0 to (- (length times) 2) always
+	(<= (end-time (nth i times)) (start-time (nth (1+ i) times)))))))
 
 (defun time-difference (first-time second-time)
   (if (overlap-p first-time second-time)
@@ -152,22 +160,25 @@
 	  (- (start-time second-time) (end-time first-time))
 	  (- (start-time first-time) (end-time second-time)))))
 
+(defun time-to-int (string)
+  (destructuring-bind (first second) (cl-utilities:split-sequence #\: string)
+      (+ (* (parse-integer first) 60)
+	 (parse-integer second :junk-allowed t)
+	 (if (and (/= (parse-integer first) 12)
+		  (equal (char (reverse string) 1) #\P))
+	     (* 12 60)
+	     0))))
+
+(defun time-string-split (string)
+  (mapcar
+   (lambda (x) (string-trim " " x))
+   (cl-utilities:split-sequence #\- string)))
+
 (defun set-time-from-string (class-time string)
-  (let ((index 0) (next-int 0))    
-    (with-accessors ((start-time start-time) (end-time end-time)) class-time      
-      (loop for i from 1 to 4 do
-	   (macrolet ((set-time-var (n) `(if (< i 3) (setf start-time ,n) (setf end-time ,n)))
-		      (get-time-var () `(if (< i 3) start-time end-time)))
-	     (multiple-value-setq (next-int index) (parse-integer string :junk-allowed t))
-	     (if (equal (mod i 2) 1)
-		 (progn (set-time-var (+ (get-time-var) (* 60 next-int)))
-			(setf string (subseq string (1+ index))))
-		 (progn (set-time-var (+ (get-time-var) next-int))
-			(setf string (subseq string index))
-			(when (equal (char string 0) #\P)
-			  (set-time-var (+ (get-time-var) (* 12 60))))))
-	     (when (equal i 2) (setf string (subseq string 5)))))))
-  class-time)
+  (destructuring-bind (start end) (mapcar #'time-to-int (time-string-split string))
+    (setf (start-time class-time) start)
+    (setf (end-time class-time) end)
+    class-time))
 
 (defun get-dates-from-string (string)
   (loop for i from 0 to (- (/ (length string) 2) 1)
@@ -202,20 +213,33 @@
 	       `(cdr (assoc ,key ,alist)))
 	     (get-int-value (key &optional (alist 'alist))
 	       `(parse-integer (get-value ,key ,alist))))
-    (make-instance 'section
-		   :section-number (get-int-value :*section-number)
-		   :section-type (get-value :*section-type)
-		   :session-description (get-value :*session-descr)
-		   :class-topic (get-value :*class-topic)
-		   :enrollment-total (get-value :*enrollment-total)
-		   :enrollment-capacity (get-value :*enrollment-capacity)
-		   :available-seats (get-value :*available-seats)
-		   :wait-total (get-value :*wait-total)
-		   :wait-capacity (get-value :*wait-capacity)
-		   :credit-hours (get-value :*credit-hours)
-		   :class-time (let ((meeting (get-value :*meeting)))
-				 (make-class-time (get-value :*times meeting)
-						  (get-value :*days meeting))))))
+    (make-instance
+     'section
+     :section-number (get-value :*section-number)
+     :section-type (get-value :*section-type)
+     :session-description (get-value :*session-descr)
+     :class-topic (get-value :*class-topic)
+     :enrollment-total (get-value :*enrollment-total)
+     :enrollment-capacity (get-value :*enrollment-capacity)
+     :available-seats (get-value :*available-seats)
+     :wait-total (get-value :*wait-total)
+     :wait-capacity (get-value :*wait-capacity)
+     :credit-hours (get-value :*credit-hours)
+     :class-time (let ((meeting (get-value :*meeting)))
+		   (if (assoc :*times meeting)
+		       (make-class-time (get-value :*times meeting)
+					(get-value :*days meeting))
+		       (if (apply #'equal (mapcar (lambda (x)
+						    (concatenate 'string
+								 (get-value :*times x)
+								 (get-value :*days x)))
+						  meeting))
+			   (make-class-time (get-value :*times (first meeting))
+					    (get-value :*days (first meeting)))
+			   (error "Multiple class meetings with different times/days")))))))
+
+
+
 
 (defun print-section (section)
   (format t "~a ~a ~a ~a~%"
@@ -223,7 +247,11 @@
 	  (start-time (class-time section))
 	  (end-time (class-time section))
 	  (enrollment-total section)))
-	  
+
+(defun print-sections (sections)
+  (loop for section in sections do
+       (print-section section))
+  (format t "~%"))
 
 (defun get-sections-from-api-call (alist)
   (mapcar 'make-section-from-api-alist (rest alist)))
@@ -260,9 +288,64 @@
 	      when (funcall filter-function value)
 	      collect value))))
 
-;; (defun cartesian-product-generator (&rest lists)
-;;   (let ((
+(define-condition generator-end (error) ())
 
+(defun list-to-generator (list)
+  (lambda ()
+    (if list
+	(pop list)
+	(error 'generator-end))))
+
+(defun next (generator)
+  (funcall generator))
+
+(defun gen-map (func generator)
+  (lambda ()
+    (funcall func (next generator))))
+
+(defun gen-filter (func generator)
+  (lambda ()
+    (let ((x (next generator)))
+      (loop while (not (funcall func x)) do
+	(setf x (next generator)))
+      x)))
+
+(defmacro for ((symbol in generator) &rest expressions)
+  `(let ((,symbol nil))
+     (loop
+       (handler-case
+	   (setf ,symbol (next ,generator))
+	 (generator-end () (return)))
+       (progn ,@expressions))))
+     
+
+(defun generator-to-list (generator)
+  (let ((result nil))
+    (for (i in generator)
+	 (push i result))
+    (reverse result)))
+	  
+(defun cartesian-product-generator (&rest lists)
+  (let ((indicies (loop for i from 1 to (length lists) collecting 0))
+	(carry 0)
+	(cycled nil))
+    (lambda ()
+      (if (and cycled (every (lambda (x) (= x 0)) indicies))
+	  (error 'generator-end)
+	  (let ((result (loop for i from 0 to (1- (length lists))
+			  collecting (nth (nth i indicies) (nth i lists)))))
+	    (incf (first (last indicies)))
+	    (loop for i from (1- (length lists)) downto 0 do
+		 (progn
+		   (when (/= carry 0)
+		     (incf (nth i indicies))
+		     (setf carry 0))
+		   (when (>= (nth i indicies) (length (nth i lists)))
+		     (setf (nth i indicies) 0)
+		     (setf carry 1))))
+	    (setf cycled t)
+	    result)))))
+	    
 (defun binary-combinations (list)
   (apply #'append
 	 (loop for first in list
@@ -270,22 +353,35 @@
 	      (loop for second in (nthcdr index list)
 		 collecting (list first second)))))
 
-	    
+;; (defun valid-section-combinations (classes)
+;;   (apply #'cartesian-product-filter
+;; 	 (lambda (list)
+;; 	   (every
+;; 	    (lambda (n) (not (overlap-p (class-time (first n)) (class-time (car (last n))))))
+;; 	    (binary-combinations list)))
+;; 	 classes))
+
+;; (defun valid-section-combinations (classes)
+;;   (gen-filter
+;;    (lambda (list)
+;;      (every
+;;       (lambda (n) (not (overlap-p (class-time (first n)) (class-time (car (last n))))))
+;;       (binary-combinations list)))
+;;    (apply #'cartesian-product-generator classes)))
+
+(defun sections-overlap-p (&rest sections)
+  (apply #'overlap-p (mapcar 'class-time sections)))
 
 (defun valid-section-combinations (classes)
-  (apply #'cartesian-product-filter
-	 (lambda (list)
-	   (every
-	    (lambda (n) (not (overlap-p (class-time (first n)) (class-time (car (last n))))))
-	    (binary-combinations list)))
-	 classes))
-		
+  (gen-filter
+   (lambda (list) (not (apply #'sections-overlap-p list)))
+   (apply #'cartesian-product-generator classes)))
+
 (defun valid-class-combinations (&rest class-args)
   (valid-section-combinations
    (apply #'append
-	 (mapcar
-	  (lambda (class-identifiers)
-	    (apply #'type-grouped-class-sections-list class-identifiers))
-	  class-args))))
-  
-	 
+	  (mapcar
+	   (lambda (class-identifiers)
+	     (apply #'type-grouped-class-sections-list class-identifiers))
+	   class-args))))
+
