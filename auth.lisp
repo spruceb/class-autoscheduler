@@ -5,9 +5,6 @@
 (ql:quickload :cl-utilities)
 (ql:quickload :alexandria)
 
-;; (require 'cl-json)
-;; (require 'cl-base64)
-;; (require 'drakma)
 (with-open-file (stream "keys")
   (defparameter *consumer-key* (read-line stream))
   (defparameter *consumer-secret* (read-line stream)))
@@ -140,21 +137,27 @@
   (and (<= (start-time containing-time) (start-time contained-time))
        (>= (end-time containing-time) (end-time contained-time))))
 
-;; (defun overlap-p (first-time second-time)
-;;   (not (or
-;; 	(<= (start-time first-time) (end-time first-time) (start-time second-time))
-;; 	(>= (end-time first-time) (start-time first-time) (end-time second-time)))))
-
-(defun overlap-p (&rest times)
+(defun time-overlap-p (&rest times)
   (setf times (sort times #'< :key 'start-time))
-  ;(format t "~a ~a~%" (mapcar 'start-time times) (apply #'< (mapcar 'start-time times)))
   (or
    (not (apply #'< (mapcar 'start-time times)))
    (not (loop for i from 0 to (- (length times) 2) always
-	(<= (end-time (nth i times)) (start-time (nth (1+ i) times)))))))
+	     (<= (end-time (nth i times)) (start-time (nth (1+ i) times)))))))
+
+(defun days-overlap-p (first second)
+  (intersection (days first) (days second) :test 'equal))
+
+(defun two-overlap-p (first second)
+  (and (days-overlap-p first second)
+       (time-overlap-p first second)))
+
+(defun overlap-p (&rest times)
+  (some 'identity (mapcar
+		    (lambda (pair) (apply #'two-overlap-p pair))
+		    (pairs times))))
 
 (defun time-difference (first-time second-time)
-  (if (overlap-p first-time second-time)
+  (if (time-overlap-p first-time second-time)
       0
       (if (>= (start-time second-time) (end-time first-time))
 	  (- (start-time second-time) (end-time first-time))
@@ -242,10 +245,11 @@
 
 
 (defun print-section (section)
-  (format t "~a ~a ~a ~a~%"
+  (format t "~a ~a ~a ~a ~a~%"
 	  (section-type section)
 	  (start-time (class-time section))
 	  (end-time (class-time section))
+	  (days (class-time section))
 	  (enrollment-total section)))
 
 (defun print-sections (sections)
@@ -345,29 +349,10 @@
 		     (setf carry 1))))
 	    (setf cycled t)
 	    result)))))
-	    
-(defun binary-combinations (list)
-  (apply #'append
-	 (loop for first in list
-	    for index from 1 to (1- (length list)) collect
-	      (loop for second in (nthcdr index list)
-		 collecting (list first second)))))
 
-;; (defun valid-section-combinations (classes)
-;;   (apply #'cartesian-product-filter
-;; 	 (lambda (list)
-;; 	   (every
-;; 	    (lambda (n) (not (overlap-p (class-time (first n)) (class-time (car (last n))))))
-;; 	    (binary-combinations list)))
-;; 	 classes))
-
-;; (defun valid-section-combinations (classes)
-;;   (gen-filter
-;;    (lambda (list)
-;;      (every
-;;       (lambda (n) (not (overlap-p (class-time (first n)) (class-time (car (last n))))))
-;;       (binary-combinations list)))
-;;    (apply #'cartesian-product-generator classes)))
+(defun pairs (list)
+  (loop for (elem . rest) on list
+        nconc (loop for elem-2 in rest collect (list elem elem-2))))
 
 (defun sections-overlap-p (&rest sections)
   (apply #'overlap-p (mapcar 'class-time sections)))
